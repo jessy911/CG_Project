@@ -17,17 +17,7 @@
 #else
 import vulkan_hpp;
 #endif
-#if defined(__ANDROID__)
-#	include <vulkan/vulkan_android.h>
-#	include <vulkan/vulkan_core.h>
-#endif
 #include <vulkan/vulkan_profiles.hpp>
-
-#if defined(__ANDROID__)
-#	define PLATFORM_ANDROID 1
-#else
-#	define PLATFORM_DESKTOP 1
-#endif
 
 // Include tinygltf instead of tinyobjloader
 // TINYGLTF_IMPLEMENTATION is already defined in the command line
@@ -37,43 +27,20 @@ import vulkan_hpp;
 // Include KTX library for texture loading
 #include <ktx.h>
 
-#if PLATFORM_ANDROID
-#	include <android/asset_manager.h>
-#	include <android/asset_manager_jni.h>
-#	include <android/log.h>
-#	include <game-activity/native_app_glue/android_native_app_glue.h>
-
-// Declare and implement app_dummy function from native_app_glue
-extern "C" void app_dummy()
-{
-	// This is a dummy function that does nothing
-	// It's used to prevent the linker from stripping out the native_app_glue code
-}
-
-// Define AAssetManager type for Android
-typedef AAssetManager AssetManagerType;
-
-#	define LOGI(...) ((void) __android_log_print(ANDROID_LOG_INFO, "VulkanTutorial", __VA_ARGS__))
-#	define LOGW(...) ((void) __android_log_print(ANDROID_LOG_WARN, "VulkanTutorial", __VA_ARGS__))
-#	define LOGE(...) ((void) __android_log_print(ANDROID_LOG_ERROR, "VulkanTutorial", __VA_ARGS__))
-#else
-// Define AAssetManager type for non-Android platforms
-typedef void AssetManagerType;
 // Desktop-specific includes
-#	define GLFW_INCLUDE_VULKAN
-#	include <GLFW/glfw3.h>
+#define GLFW_INCLUDE_VULKAN
+#include <GLFW/glfw3.h>
 
 // Define logging macros for Desktop
-#	define LOGI(...)        \
-		printf(__VA_ARGS__); \
-		printf("\n")
-#	define LOGW(...)        \
-		printf(__VA_ARGS__); \
-		printf("\n")
-#	define LOGE(...)                 \
-		fprintf(stderr, __VA_ARGS__); \
-		fprintf(stderr, "\n")
-#endif
+#define LOGI(...)        \
+	printf(__VA_ARGS__); \
+	printf("\n")
+#define LOGW(...)        \
+	printf(__VA_ARGS__); \
+	printf("\n")
+#define LOGE(...)                 \
+	fprintf(stderr, __VA_ARGS__); \
+	fprintf(stderr, "\n")
 
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -86,23 +53,11 @@ typedef void AssetManagerType;
 constexpr uint32_t WIDTH  = 800;
 constexpr uint32_t HEIGHT = 600;
 // Update paths to use glTF model and KTX2 texture
-const std::string MODEL_PATH           = "models/viking_room.glb";
-const std::string TEXTURE_PATH         = "textures/viking_room.ktx2";
+const std::string MODEL_PATH           = "assets/models/viking_room.glb";
+const std::string TEXTURE_PATH         = "assets/textures/viking_room.ktx2";
 constexpr int     MAX_FRAMES_IN_FLIGHT = 2;
 // Define the number of objects to render
 constexpr int MAX_OBJECTS = 3;
-
-// Define VpProfileProperties structure for Android only
-#if PLATFORM_ANDROID
-#	ifndef VP_PROFILE_PROPERTIES_DEFINED
-#		define VP_PROFILE_PROPERTIES_DEFINED
-struct VpProfileProperties
-{
-	char     name[256];
-	uint32_t specVersion;
-};
-#	endif
-#endif
 
 // Define Vulkan Profile constants
 #ifndef VP_KHR_ROADMAP_2022_NAME
@@ -118,17 +73,6 @@ struct AppInfo
 	bool                profileSupported = false;
 	VpProfileProperties profile;
 };
-
-#if PLATFORM_ANDROID
-void android_main(android_app *app);
-
-struct AndroidAppState
-{
-	ANativeWindow *nativeWindow = nullptr;
-	bool           initialized  = false;
-	android_app   *app          = nullptr;
-};
-#endif
 
 #ifdef NDEBUG
 constexpr bool enableValidationLayers = false;
@@ -209,64 +153,6 @@ struct UniformBufferObject
 class VulkanApplication
 {
   public:
-#if PLATFORM_ANDROID
-	void cleanupAndroid()
-	{
-		// Clean up resources in each GameObject
-		for (auto &gameObject : gameObjects)
-		{
-			// Unmap memory
-			for (size_t i = 0; i < gameObject.uniformBuffersMemory.size(); i++)
-			{
-				if (gameObject.uniformBuffersMapped[i] != nullptr)
-				{
-					gameObject.uniformBuffersMemory[i].unmapMemory();
-				}
-			}
-
-			// Clear vectors to release resources
-			gameObject.uniformBuffers.clear();
-			gameObject.uniformBuffersMemory.clear();
-			gameObject.uniformBuffersMapped.clear();
-			gameObject.descriptorSets.clear();
-		}
-	}
-
-	void run(android_app *app)
-	{
-		androidAppState.nativeWindow = app->window;
-		androidAppState.app          = app;
-		app->userData                = &androidAppState;
-		app->onAppCmd                = handleAppCommand;
-		// Note: onInputEvent is no longer a member of android_app in the current NDK version
-		// Input events are now handled differently
-
-		int                  events;
-		android_poll_source *source;
-
-		while (app->destroyRequested == 0)
-		{
-			while (ALooper_pollOnce(androidAppState.initialized ? 0 : -1, nullptr, &events, (void **) &source) >= 0)
-			{
-				if (source != nullptr)
-				{
-					source->process(app, source);
-				}
-			}
-
-			if (androidAppState.initialized && androidAppState.nativeWindow != nullptr)
-			{
-				drawFrame();
-			}
-		}
-
-		if (androidAppState.initialized)
-		{
-			device.waitIdle();
-			cleanupAndroid();
-		}
-	}
-#else
 	void run()
 	{
 		initWindow();
@@ -274,52 +160,9 @@ class VulkanApplication
 		mainLoop();
 		cleanup();
 	}
-#endif
 
   private:
-#if PLATFORM_ANDROID
-	AndroidAppState androidAppState;
-
-	static void handleAppCommand(android_app *app, int32_t cmd)
-	{
-		auto *appState = static_cast<AndroidAppState *>(app->userData);
-
-		switch (cmd)
-		{
-			case APP_CMD_INIT_WINDOW:
-				if (app->window != nullptr)
-				{
-					appState->nativeWindow = app->window;
-					// We can't cast AndroidAppState to VulkanApplication directly
-					// Instead, we need to access the VulkanApplication instance through a global variable
-					// or another mechanism. For now, we'll just set the initialized flag.
-					appState->initialized = true;
-				}
-				break;
-			case APP_CMD_TERM_WINDOW:
-				appState->nativeWindow = nullptr;
-				break;
-			default:
-				break;
-		}
-	}
-
-	static int32_t handleInputEvent(android_app *app, AInputEvent *event)
-	{
-		if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_MOTION)
-		{
-			float x = AMotionEvent_getX(event, 0);
-			float y = AMotionEvent_getY(event, 0);
-
-			LOGI("Touch at: %f, %f", x, y);
-
-			return 1;
-		}
-		return 0;
-	}
-#else
 	GLFWwindow *window = nullptr;
-#endif
 
 	AppInfo                          appInfo = {};
 	vk::raii::Context                context;
@@ -376,7 +219,6 @@ class VulkanApplication
 	    vk::KHRSwapchainExtensionName,
 	    vk::KHRCreateRenderpass2ExtensionName};
 
-#if PLATFORM_DESKTOP
 	void initWindow()
 	{
 		glfwInit();
@@ -394,7 +236,6 @@ class VulkanApplication
 		auto app                = static_cast<VulkanApplication *>(glfwGetWindowUserPointer(window));
 		app->framebufferResized = true;
 	}
-#endif
 
   public:
 	void initVulkan()
@@ -425,7 +266,6 @@ class VulkanApplication
 	}
 
   private:
-#if PLATFORM_DESKTOP
 	void mainLoop()
 	{
 		while (!glfwWindowShouldClose(window))
@@ -436,7 +276,6 @@ class VulkanApplication
 
 		device.waitIdle();
 	}
-#endif
 
 	void cleanupSwapChain()
 	{
@@ -444,7 +283,6 @@ class VulkanApplication
 		swapChain = nullptr;
 	}
 
-#if PLATFORM_DESKTOP
 	void cleanup()
 	{
 		// Clean up resources in each GameObject
@@ -470,11 +308,9 @@ class VulkanApplication
 		glfwDestroyWindow(window);
 		glfwTerminate();
 	}
-#endif
 
 	void recreateSwapChain()
 	{
-#if PLATFORM_DESKTOP
 		int width = 0, height = 0;
 		glfwGetFramebufferSize(window, &width, &height);
 		while ((width == 0 || height == 0) && !glfwWindowShouldClose(window))
@@ -486,7 +322,6 @@ class VulkanApplication
 		{
 			return;
 		}
-#endif
 
 		device.waitIdle();
 
@@ -528,24 +363,12 @@ class VulkanApplication
 
 	void createSurface()
 	{
-#if PLATFORM_DESKTOP
 		VkSurfaceKHR _surface;
 		if (glfwCreateWindowSurface(*instance, window, nullptr, &_surface) != VK_SUCCESS)
 		{
 			throw std::runtime_error("failed to create window surface!");
 		}
 		surface = vk::raii::SurfaceKHR(instance, _surface);
-#else
-		VkSurfaceKHR                  _surface;
-		VkAndroidSurfaceCreateInfoKHR createInfo{
-		    .sType  = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR,
-		    .window = androidAppState.nativeWindow};
-		if (vkCreateAndroidSurfaceKHR(*instance, &createInfo, nullptr, &_surface) != VK_SUCCESS)
-		{
-			throw std::runtime_error("failed to create Android surface!");
-		}
-		surface = vk::raii::SurfaceKHR(instance, _surface);
-#endif
 	}
 
 	bool isDeviceSuitable(vk::raii::PhysicalDevice const &physicalDevice)
@@ -596,36 +419,16 @@ class VulkanApplication
 
 		// Check for Vulkan profile support
 		VpProfileProperties profileProperties;
-#if PLATFORM_ANDROID
-		strcpy(profileProperties.name, VP_KHR_ROADMAP_2022_NAME);
-#else
 		strcpy(profileProperties.profileName, VP_KHR_ROADMAP_2022_NAME);
-#endif
 		profileProperties.specVersion = VP_KHR_ROADMAP_2022_SPEC_VERSION;
 
 		VkBool32 supported = VK_FALSE;
-		bool     result    = false;
 
-#if PLATFORM_ANDROID
-		// Create a vp::ProfileDesc from our VpProfileProperties
-		vp::ProfileDesc profileDesc = {profileProperties.name, profileProperties.specVersion};
-
-		// Use vp::GetProfileSupport for Android
-		result = vp::GetProfileSupport(*physicalDevice,        // Pass the physical device directly
-		                               &profileDesc,           // Pass the profile description
-		                               &supported              // Output parameter for support status
-		);
-#else
 		// Use vpGetPhysicalDeviceProfileSupport for Desktop
 		VkResult vk_result = vpGetPhysicalDeviceProfileSupport(*instance, *physicalDevice, &profileProperties, &supported);
-		result             = vk_result == static_cast<int>(vk::Result::eSuccess);
-#endif
-		const char *name = nullptr;
-#ifdef PLATFORM_ANDROID
-		name = profileProperties.name;
-#else
-		name = profileProperties.profileName;
-#endif
+		bool     result    = vk_result == static_cast<int>(vk::Result::eSuccess);
+
+		const char *name = profileProperties.profileName;
 
 		if (result && supported == VK_TRUE)
 		{
@@ -739,7 +542,7 @@ class VulkanApplication
 
 	void createGraphicsPipeline()
 	{
-		vk::raii::ShaderModule shaderModule = createShaderModule(this->readFile("shaders/slang.spv"));
+		vk::raii::ShaderModule shaderModule = createShaderModule(this->readFile("shaders/shader.slang.spv"));
 
 		vk::PipelineShaderStageCreateInfo vertShaderStageInfo{.stage = vk::ShaderStageFlagBits::eVertex, .module = *shaderModule, .pName = "vertMain"};
 		vk::PipelineShaderStageCreateInfo fragShaderStageInfo{.stage = vk::ShaderStageFlagBits::eFragment, .module = *shaderModule, .pName = "fragMain"};
@@ -1639,14 +1442,8 @@ class VulkanApplication
 		{
 			return capabilities.currentExtent;
 		}
-#if PLATFORM_DESKTOP
 		int width, height;
 		glfwGetFramebufferSize(window, &width, &height);
-#else
-		ANativeWindow *window = androidAppState.nativeWindow;
-		int            width  = ANativeWindow_getWidth(window);
-		int            height = ANativeWindow_getHeight(window);
-#endif
 		return {
 		    std::clamp<uint32_t>(width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
 		    std::clamp<uint32_t>(height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height)};
@@ -1656,16 +1453,10 @@ class VulkanApplication
 	{
 		std::vector<const char *> extensions;
 
-#if PLATFORM_DESKTOP
 		// Get GLFW extensions
 		uint32_t glfwExtensionCount = 0;
 		auto     glfwExtensions     = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
 		extensions.assign(glfwExtensions, glfwExtensions + glfwExtensionCount);
-#else
-		// Android extensions
-		extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
-		extensions.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
-#endif
 
 		// Add debug extensions if validation layers are enabled
 		if (enableValidationLayers)
@@ -1694,24 +1485,6 @@ class VulkanApplication
 
 	std::vector<char> readFile(const std::string &filename)
 	{
-#if PLATFORM_ANDROID
-		// Android asset loading
-		if (androidAppState.app == nullptr)
-		{
-			LOGE("Android app not initialized");
-			throw std::runtime_error("Android app not initialized");
-		}
-		AAsset *asset = AAssetManager_open(androidAppState.app->activity->assetManager, filename.c_str(), AASSET_MODE_BUFFER);
-		if (!asset)
-		{
-			throw std::runtime_error("failed to open file: " + filename);
-		}
-
-		size_t            size = AAsset_getLength(asset);
-		std::vector<char> buffer(size);
-		AAsset_read(asset, buffer.data(), size);
-		AAsset_close(asset);
-#else
 		// Desktop file loading
 		std::ifstream file(filename, std::ios::ate | std::ios::binary);
 		if (!file.is_open())
@@ -1724,20 +1497,10 @@ class VulkanApplication
 		file.seekg(0);
 		file.read(buffer.data(), fileSize);
 		file.close();
-#endif
 		return buffer;
 	}
 };
 
-#if PLATFORM_ANDROID
-void android_main(android_app *app)
-{
-	app_dummy();
-
-	VulkanApplication vulkanApp;
-	vulkanApp.run(app);
-}
-#else
 int main()
 {
 	try
@@ -1752,4 +1515,3 @@ int main()
 	}
 	return EXIT_SUCCESS;
 }
-#endif
