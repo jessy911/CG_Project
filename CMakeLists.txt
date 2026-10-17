@@ -4,62 +4,69 @@ project(VulkanEffects LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Find modules copied from the Vulkan Tutorial (attachments/CMake):
-# Findtinygltf.cmake, FindKTX.cmake, Findstb.cmake, FindVulkan.cmake
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/CMake")
-
 # Dependencies (installed via vcpkg, Vulkan SDK from LunarG)
 find_package(Vulkan 1.4.335 REQUIRED)
-find_package(glfw3 REQUIRED)
-find_package(glm REQUIRED)
-find_package(tinygltf REQUIRED)
-find_package(KTX REQUIRED)
-find_package(stb REQUIRED)
+find_package(glfw3 CONFIG REQUIRED)
+find_package(glm CONFIG REQUIRED)
+find_package(Ktx CONFIG REQUIRED)
 
-# Slang shader compiler from the Vulkan SDK
-find_program(SLANGC_EXECUTABLE slangc HINTS $ENV{VULKAN_SDK}/bin REQUIRED)
+# Header only
+find_path(TINYGLTF_INCLUDE_DIR "tiny_gltf.h" REQUIRED)
+find_path(STB_INCLUDE_DIR "stb_image.h" REQUIRED)
 
-add_executable(app src/main.cpp)
-
-# Visual Studio: start `app` by default and run it from the exe folder
-# (the program loads shaders/, models/ and textures/ relative to it)
-set_target_properties(app PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:app>")
-set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT app)
+add_executable(app
+    src/main.cpp
+    src/tinygltf_stb_impl.cpp
+)
 
 target_link_libraries(app PRIVATE
     Vulkan::Vulkan
     glfw
     glm::glm
-    tinygltf::tinygltf
-    KTX::ktx)
+    KTX::ktx
+)
 
-target_include_directories(app PRIVATE ${stb_INCLUDE_DIRS})
+target_include_directories(app PRIVATE
+    ${TINYGLTF_INCLUDE_DIR}
+    ${STB_INCLUDE_DIR}
+)
 
-target_compile_definitions(app PRIVATE
-    VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
-    VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
-    VULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS)
+# Allow designated initializers
+target_compile_definitions(app PRIVATE VULKAN_HPP_NO_STRUCT_CONSTRUCTORS)
 
-# --- Shaders: compiled on every build into <exe dir>/shaders/slang.spv ---
-set(SHADER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shader.slang)
-add_custom_target(shaders
-    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:app>/shaders
-    COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SRC}
-            -target spirv -profile spirv_1_4+spvRayQueryKHR
-            -emit-spirv-directly -fvk-use-entrypoint-name
-            -entry vertMain -entry fragMain
-            -o $<TARGET_FILE_DIR:app>/shaders/slang.spv
-    DEPENDS ${SHADER_SRC}
-    COMMENT "Compiling Slang shader"
-    VERBATIM)
-add_dependencies(app shaders)
+# Shaders: compile shaders/*.slang -> shaders/<name>.slang.spv (only when the source changed)
+find_program(SLANGC slangc HINTS "$ENV{VULKAN_SDK}/Bin" REQUIRED)
+file(GLOB SHADER_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/shaders/*.slang)
 
-# --- Assets: models and textures are copied next to the executable ---
-add_custom_target(assets
+foreach(shader ${SHADER_SOURCES})
+    get_filename_component(shader_name ${shader} NAME)
+    set(spv ${CMAKE_SOURCE_DIR}/shaders/${shader_name}.spv)
+    add_custom_command(
+        OUTPUT ${spv}
+        COMMAND ${SLANGC} ${shader} -target spirv -o ${spv}
+        DEPENDS ${shader}
+        COMMENT "Slang: ${shader_name}"
+        VERBATIM)
+    list(APPEND SHADER_SPVS ${spv})
+endforeach()
+
+# ...then copy the .spv files next to the exe (only files that differ get copied)
+if(SHADER_SPVS)
+    add_custom_target(shaders ALL
+        DEPENDS ${SHADER_SPVS}
+        COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:app>/shaders
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${SHADER_SPVS} $<TARGET_FILE_DIR:app>/shaders
+        COMMENT "Copying shaders"
+        VERBATIM)
+    add_dependencies(app shaders)
+endif()
+
+# Assets: models and textures are copied next to the executable
+add_custom_target(copy_assets ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
-            ${CMAKE_CURRENT_SOURCE_DIR}/assets/models $<TARGET_FILE_DIR:app>/models
+        ${CMAKE_SOURCE_DIR}/assets/models   $<TARGET_FILE_DIR:app>/assets/models
     COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
-            ${CMAKE_CURRENT_SOURCE_DIR}/assets/textures $<TARGET_FILE_DIR:app>/textures
-    COMMENT "Copying assets"
-    VERBATIM)
-add_dependencies(app assets)
+        ${CMAKE_SOURCE_DIR}/assets/textures $<TARGET_FILE_DIR:app>/assets/textures
+    COMMENT "Copying assets")
+add_dependencies(app copy_assets)
